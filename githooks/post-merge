@@ -1,0 +1,4 @@
+#!/bin/bash
+git config core.hooksPath githooks
+echo "Merge detectado! Executando script..."
+source migrations.sh "$(grep "MySQL password set to" /root/.mysql_passwd | awk -F"'" '{print $2}')"

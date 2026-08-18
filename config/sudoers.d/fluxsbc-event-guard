@@ -1,0 +1,31 @@
+# /etc/sudoers.d/fluxsbc-event-guard
+#
+# Permite que www-data execute apenas os comandos necessários
+# do fail2ban-client para o módulo Event Guard do FluxSBC.
+#
+# Instalar com:
+#   visudo -c -f /etc/sudoers.d/fluxsbc-event-guard  (valida sintaxe)
+#   chmod 440 /etc/sudoers.d/fluxsbc-event-guard
+
+Defaults!/usr/bin/fail2ban-client !requiretty
+Defaults!/opt/flux/web_interface/flux/addons/plugins/event_guard/event_guard_install.sh !requiretty
+
+www-data ALL=(root) NOPASSWD: /usr/bin/fail2ban-client set sip-auth-fail banip *
+www-data ALL=(root) NOPASSWD: /usr/bin/fail2ban-client set sip-auth-fail unbanip *
+www-data ALL=(root) NOPASSWD: /usr/bin/fail2ban-client set sip-auth-ip banip *
+www-data ALL=(root) NOPASSWD: /usr/bin/fail2ban-client set sip-auth-ip unbanip *
+www-data ALL=(root) NOPASSWD: /usr/bin/fail2ban-client status sip-auth-fail
+www-data ALL=(root) NOPASSWD: /usr/bin/fail2ban-client status sip-auth-ip
+www-data ALL=(root) NOPASSWD: /usr/bin/geoiplookup
+www-data ALL=(root) NOPASSWD: /usr/bin/geoiplookup6
+www-data ALL=(root) NOPASSWD: /opt/flux/web_interface/flux/addons/plugins/event_guard/event_guard_install.sh
+www-data ALL=(root) NOPASSWD: /usr/bin/systemctl stop event_guard
+www-data ALL=(root) NOPASSWD: /usr/bin/systemctl disable event_guard
+www-data ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
+www-data ALL=(root) NOPASSWD: /usr/bin/systemctl reload fail2ban
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/systemd/system/event_guard.service
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/fail2ban/jail.d/event_guard.conf
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/fail2ban/filter.d/sip-auth-fail.conf
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/fail2ban/filter.d/sip-auth-ip.conf
+www-data ALL=(root) NOPASSWD: /bin/rm -f /etc/sudoers.d/fluxsbc-event-guard
+

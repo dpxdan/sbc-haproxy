@@ -1,0 +1,10 @@
+[Unit]
+Description=FluxSBC Galera clustercheck (socket)
+Documentation=file:///opt/flux/docs/HA-MYSQL-HAPROXY.md
+
+[Socket]
+ListenStream=9200
+Accept=yes
+
+[Install]
+WantedBy=sockets.target

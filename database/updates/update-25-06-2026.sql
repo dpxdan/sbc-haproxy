@@ -1,0 +1,5 @@
+SET FOREIGN_KEY_CHECKS=0;
+
+ALTER TABLE `dids` ADD COLUMN `sip_profile_id` int NOT NULL DEFAULT 0 AFTER `last_modified_date`;
+
+SET FOREIGN_KEY_CHECKS=1;

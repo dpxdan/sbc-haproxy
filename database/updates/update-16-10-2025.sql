@@ -1,0 +1,5 @@
+SET FOREIGN_KEY_CHECKS=0;
+
+ALTER TABLE `voip_sippeers` ADD COLUMN `defaultuser` varchar(100) NULL DEFAULT NULL AFTER `callerid`;
+
+SET FOREIGN_KEY_CHECKS=1;

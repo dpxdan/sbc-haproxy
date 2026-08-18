@@ -1,0 +1,3 @@
+INSERT INTO `roles_and_permission` (`login_type`, `permission_type`, `menu_name`, `module_name`, `sub_module_name`, `module_url`, `display_name`, `permissions`, `status`, `creation_date`, `priority`) VALUES (0, 0, 'reports', 'summary', 'call_summary_reports', 'provider', 'Provider Summary', '[\"main\",\"list\",\"search\",\"export\"]', 0, '1000-01-01 00:00:00', 7.90000);
+
+UPDATE userlevels SET module_permissions = CONCAT(module_permissions, ',', (SELECT id FROM menu_modules WHERE module_name = 'provider')) WHERE userlevelid = 2 AND FIND_IN_SET((SELECT id FROM menu_modules WHERE module_name = 'provider'), module_permissions) = 0;

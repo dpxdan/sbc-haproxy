@@ -1,0 +1,3 @@
+UPDATE userlevels SET module_permissions = CONCAT(module_permissions, ',', (SELECT id FROM menu_modules WHERE menu_label = 'Customer Summary')) WHERE userlevelid = 2 AND FIND_IN_SET((SELECT id FROM menu_modules WHERE menu_label = 'Customer Summary'), module_permissions) = 0;
+
+UPDATE userlevels SET module_permissions = CONCAT(module_permissions, ',', (SELECT id FROM menu_modules WHERE menu_label = 'Reseller Summary')) WHERE userlevelid = 2 AND FIND_IN_SET((SELECT id FROM menu_modules WHERE menu_label = 'Reseller Summary'), module_permissions) = 0;

@@ -1,0 +1,24 @@
+[Unit]
+Description=FluxSBC Event Guard – Protetor SIP
+Documentation=https://github.com/Flux-Tecnologia/sbc-fluxv6
+After=network.target freeswitch.service mysql.service fail2ban.service
+Wants=freeswitch.service mysql.service fail2ban.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/flux/freeswitch/fs
+ExecStart=/usr/bin/php /opt/flux/freeswitch/fs/event_guard_daemon.php
+; ExecStopPost=/usr/bin/bash /opt/flux/misc/event_guard_flush.sh
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=event_guard
+LimitNOFILE=65536
+
+OOMScoreAdjust=-100
+
+[Install]
+WantedBy=multi-user.target

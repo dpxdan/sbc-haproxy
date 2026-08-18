@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<addon>
+	<tech_name>event_guard</tech_name>
+	<name>Event Guard</name>
+	<description>To configure list of permissions defines what network entities are allowed to have access.</description>		
+	<icon>static/images/event_guard_icon.png</icon>
+	<version>1.0.0</version>
+	<license>plugins</license>	
+	<author>Flux Telecom</author>
+	<status>production</status>
+</addon>

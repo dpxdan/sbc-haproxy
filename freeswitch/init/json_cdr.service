@@ -1,0 +1,29 @@
+; Author: Daniel Paixao <daniel@flux.net.br>
+; systemctl enable json_cdr
+; systemctl start json_cdr
+; systemctl daemon-reload
+
+[Unit]
+Description=FluxSBC json_cdr
+Wants=network-online.target
+Requires=network.target local-fs.target
+After=network.target network-online.target local-fs.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+;Type=forking
+PIDFile=/run/fluxsbc/cdr.pid
+WorkingDirectory=/var/www/html/fs
+;Environment="USER=www-data"
+;Environment="GROUP=www-data"
+;EnvironmentFile=-/etc/default/fluxsbc
+ExecStartPre=/bin/mkdir -p /var/run/fluxsbc
+;ExecStartPre=/bin/chown -R ${USER}:${GROUP} /var/www/html/fs
+ExecStart=/usr/bin/php /var/www/html/fs/cdr.php
+TimeoutSec=55s
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+Also=

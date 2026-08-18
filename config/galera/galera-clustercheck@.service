@@ -1,0 +1,13 @@
+[Unit]
+Description=FluxSBC Galera clustercheck
+Documentation=file:///opt/flux/docs/HA-MYSQL-HAPROXY.md
+
+[Service]
+Type=simple
+User=mysql
+Group=mysql
+ExecStart=/usr/local/bin/clustercheck
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutStartSec=10

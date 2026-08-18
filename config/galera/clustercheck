@@ -1,0 +1,69 @@
+#!/bin/bash
+set -uo pipefail
+
+MYSQL_DEFAULTS_FILE=${MYSQL_DEFAULTS_FILE:-/etc/mysql/clustercheck.cnf}
+AVAILABLE_WHEN_DONOR=${AVAILABLE_WHEN_DONOR:-0}
+AVAILABLE_WHEN_READONLY=${AVAILABLE_WHEN_READONLY:-0}
+CONNECT_TIMEOUT=${CONNECT_TIMEOUT:-5}
+
+read -r -t 1 _request || true
+while read -r -t 1 _line; do
+    [ -z "${_line//$'\r'/}" ] && break
+done
+
+http_response()
+{
+    local code="$1"
+    local body="$2"
+    printf 'HTTP/1.1 %s\r\n' "$code"
+    printf 'Content-Type: text/plain\r\n'
+    printf 'Content-Length: %s\r\n' "${#body}"
+    printf 'Connection: close\r\n'
+    printf '\r\n'
+    printf '%s' "$body"
+}
+
+mysql_status()
+{
+    mysql --defaults-extra-file="${MYSQL_DEFAULTS_FILE}" \
+          --connect-timeout="${CONNECT_TIMEOUT}" -nNE \
+          -e "$1" 2>/dev/null | tail -1
+}
+
+if [ ! -r "${MYSQL_DEFAULTS_FILE}" ]; then
+    http_response "503 Service Unavailable" "Galera node unavailable: ${MYSQL_DEFAULTS_FILE} nao legivel"
+    exit 1
+fi
+
+WSREP_READY=$(mysql_status "SHOW GLOBAL STATUS LIKE 'wsrep_ready';")
+if [ "${WSREP_READY}" != "ON" ]; then
+    http_response "503 Service Unavailable" "Galera node unavailable: wsrep_ready=${WSREP_READY:-desconhecido}"
+    exit 1
+fi
+
+WSREP_STATE=$(mysql_status "SHOW GLOBAL STATUS LIKE 'wsrep_local_state';")
+case "${WSREP_STATE}" in
+    4)
+        ;;
+    2)
+        if [ "${AVAILABLE_WHEN_DONOR}" != "1" ]; then
+            http_response "503 Service Unavailable" "Galera node unavailable: estado Donor/Desynced"
+            exit 1
+        fi
+        ;;
+    *)
+        http_response "503 Service Unavailable" "Galera node unavailable: wsrep_local_state=${WSREP_STATE:-desconhecido}"
+        exit 1
+        ;;
+esac
+
+if [ "${AVAILABLE_WHEN_READONLY}" != "1" ]; then
+    READ_ONLY=$(mysql_status "SHOW GLOBAL VARIABLES LIKE 'read_only';")
+    if [ "${READ_ONLY}" = "ON" ]; then
+        http_response "503 Service Unavailable" "Galera node unavailable: read_only=ON"
+        exit 1
+    fi
+fi
+
+http_response "200 OK" "Galera node ready: wsrep_local_state=${WSREP_STATE}"
+exit 0
