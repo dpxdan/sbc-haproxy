@@ -52,6 +52,15 @@ O instalador habilita `net.ipv4.ip_nonlocal_bind` para permitir o bind no VIP.
 
 ## 2. Pré-requisitos no cluster Galera
 
+> **Atenção — engine de banco.** O `flux_install.sh` instala `mysql-community-server` 8
+> da Oracle, que **não suporta Galera** (Galera é MariaDB / Percona XtraDB Cluster).
+> Adotar a topologia desta seção exige trocar o servidor de banco nos nós do cluster.
+> Galera também precisa de **3 nós** para ter quorum — com 2, a perda de um deixa o
+> sobrevivente inoperante sem um árbitro (`garbd`).
+>
+> Para o cenário de **dois servidores** com o MySQL que já está instalado, use
+> replicação assíncrona com GTID: veja [HA-MYSQL-REPLICACAO.md](HA-MYSQL-REPLICACAO.md).
+
 ### 2.1 Chaves primárias
 
 Galera não suporta tabelas InnoDB sem chave primária. A migração
