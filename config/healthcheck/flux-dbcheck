@@ -1,0 +1,164 @@
+#!/bin/bash
+# Flux SBC - Unindo pessoas e negócios
+# Copyright (C) 2026 Flux Telecom
+# Daniel Paixao <daniel@flux.net.br>
+# License https://www.gnu.org/licenses/agpl-3.0.html
+# Agente de health check para o HAProxy decidir o papel deste no de banco.
+#
+# Endpoints:
+#   GET /write  200 se este no aceita escrita
+#   GET /read   200 se este no serve leitura com atraso aceitavel
+#   GET /       equivalente a /write
+set -uo pipefail
+
+MYSQL_DEFAULTS_FILE=${MYSQL_DEFAULTS_FILE:-/etc/mysql/flux-dbcheck.cnf}
+FLUX_DB_READ_MAX_LAG=${FLUX_DB_READ_MAX_LAG:-30}
+AVAILABLE_WHEN_DONOR=${AVAILABLE_WHEN_DONOR:-0}
+CONNECT_TIMEOUT=${CONNECT_TIMEOUT:-5}
+
+REQUEST_LINE=""
+read -r -t 2 REQUEST_LINE || true
+while read -r -t 1 _line; do
+    [ -z "${_line//$'\r'/}" ] && break
+done
+
+ENDPOINT=$(echo "${REQUEST_LINE}" | awk '{print $2}' | cut -d'?' -f1)
+case "${ENDPOINT}" in
+    /read)  ROLE="read" ;;
+    /write) ROLE="write" ;;
+    ""|/)   ROLE="write" ;;
+    *)      ROLE="write" ;;
+esac
+
+http_response()
+{
+    local code="$1"
+    local body="$2"
+    printf 'HTTP/1.1 %s\r\n' "$code"
+    printf 'Content-Type: text/plain\r\n'
+    printf 'Content-Length: %s\r\n' "${#body}"
+    printf 'Connection: close\r\n'
+    printf '\r\n'
+    printf '%s' "$body"
+}
+
+approve()
+{
+    http_response "200 OK" "flux-dbcheck ${ROLE}: OK - $1"
+    exit 0
+}
+
+reject()
+{
+    http_response "503 Service Unavailable" "flux-dbcheck ${ROLE}: INDISPONIVEL - $1"
+    exit 1
+}
+
+mysql_cmd()
+{
+    mysql --defaults-extra-file="${MYSQL_DEFAULTS_FILE}" \
+          --connect-timeout="${CONNECT_TIMEOUT}" "$@" 2>/dev/null
+}
+
+status_value()
+{
+    mysql_cmd -N -B -e "SHOW GLOBAL STATUS LIKE '$1';" | head -1 | awk '{print $2}'
+}
+
+global_var()
+{
+    mysql_cmd -N -B -e "SELECT @@GLOBAL.$1;" | head -1
+}
+
+replica_status()
+{
+    local out
+    out=$(mysql_cmd -e "SHOW REPLICA STATUS\G")
+    if [ -z "$out" ]; then
+        out=$(mysql_cmd -e "SHOW SLAVE STATUS\G")
+    fi
+    printf '%s' "$out"
+}
+
+status_field()
+{
+    printf '%s' "$1" | grep -E "^[[:space:]]*$2:" | head -n1 | cut -d: -f2- | sed -e 's/^[[:space:]]*//'
+}
+
+if [ ! -r "${MYSQL_DEFAULTS_FILE}" ]; then
+    reject "arquivo de credenciais ${MYSQL_DEFAULTS_FILE} nao legivel"
+fi
+
+if ! mysql_cmd -N -B -e "SELECT 1;" >/dev/null; then
+    reject "MySQL nao respondeu"
+fi
+
+WSREP_STATE=$(status_value 'wsrep_local_state')
+
+if [ -n "${WSREP_STATE}" ]; then
+    WSREP_READY=$(status_value 'wsrep_ready')
+
+    if [ "${WSREP_READY}" != "ON" ]; then
+        reject "wsrep_ready=${WSREP_READY:-desconhecido}"
+    fi
+
+    case "${WSREP_STATE}" in
+        4) ;;
+        2)
+            if [ "${AVAILABLE_WHEN_DONOR}" != "1" ]; then
+                reject "no atuando como Donor/Desynced"
+            fi
+            ;;
+        *)
+            reject "wsrep_local_state=${WSREP_STATE}"
+            ;;
+    esac
+
+    if [ "${ROLE}" = "read" ]; then
+        approve "galera sincronizado (wsrep_local_state=${WSREP_STATE})"
+    fi
+
+    if [ "$(global_var read_only)" = "1" ]; then
+        reject "read_only=ON"
+    fi
+    approve "galera sincronizado e apto a escrita"
+fi
+
+READ_ONLY=$(global_var read_only)
+SUPER_READ_ONLY=$(global_var super_read_only)
+REPL=$(replica_status)
+
+if [ "${ROLE}" = "write" ]; then
+    if [ "${READ_ONLY}" = "1" ] || [ "${SUPER_READ_ONLY}" = "1" ]; then
+        reject "read_only=ON (no de replica; promova antes de receber escrita)"
+    fi
+    approve "no aceita escrita"
+fi
+
+if [ -z "${REPL}" ]; then
+    if [ "${READ_ONLY}" = "1" ]; then
+        reject "read_only=ON e sem replicacao configurada"
+    fi
+    approve "no primario, leitura local"
+fi
+
+IO_RUNNING=$(status_field "${REPL}" "Replica_IO_Running")
+[ -z "${IO_RUNNING}" ] && IO_RUNNING=$(status_field "${REPL}" "Slave_IO_Running")
+SQL_RUNNING=$(status_field "${REPL}" "Replica_SQL_Running")
+[ -z "${SQL_RUNNING}" ] && SQL_RUNNING=$(status_field "${REPL}" "Slave_SQL_Running")
+LAG=$(status_field "${REPL}" "Seconds_Behind_Source")
+[ -z "${LAG}" ] && LAG=$(status_field "${REPL}" "Seconds_Behind_Master")
+
+if [ "${IO_RUNNING}" != "Yes" ] || [ "${SQL_RUNNING}" != "Yes" ]; then
+    reject "replicacao parada (IO=${IO_RUNNING:-?}, SQL=${SQL_RUNNING:-?})"
+fi
+
+if [ -z "${LAG}" ] || [ "${LAG}" = "NULL" ]; then
+    reject "lag de replicacao indisponivel"
+fi
+
+if [ "${LAG}" -gt "${FLUX_DB_READ_MAX_LAG}" ]; then
+    reject "lag=${LAG}s acima do limite de ${FLUX_DB_READ_MAX_LAG}s"
+fi
+
+approve "replica saudavel (lag=${LAG}s)"

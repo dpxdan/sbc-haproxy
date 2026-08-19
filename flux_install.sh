@@ -52,6 +52,9 @@ MYSQL_CNF="/etc/mysql/mysql.cnf"
 FLUX_DB_MODE="local"
 #FLUX_DB_NODES: nos Galera no formato "ip:porta,ip:porta,ip:porta"
 FLUX_DB_NODES=""
+#FLUX_DB_HOSTS: lista para o HAProxy; em instalacao remota use apenas hosts MySQL.
+#Ex.: "10.211.55.28:3316,10.211.55.29:3316"
+FLUX_DB_HOSTS=""
 #FLUX_DB_VIP: obrigatorio quando FLUX_DB_MODE=haproxy_vip
 FLUX_DB_VIP=""
 FLUX_DB_WRITE_PORT=3306
@@ -544,8 +547,9 @@ install_haproxy()
         return 0
     fi
 
-    if [ -z "${FLUX_DB_NODES}" ]; then
-        log_message "Erro: FLUX_DB_NODES vazio. Informe os nos Galera no formato ip:porta separados por virgula."
+    local db_hosts="${FLUX_DB_HOSTS:-${FLUX_DB_NODES}}"
+    if [ -z "${db_hosts}" ]; then
+        log_message "Erro: FLUX_DB_HOSTS/FLUX_DB_NODES vazio. Informe os nos MySQL no formato ip:porta separados por virgula."
         exit 1
     fi
 
@@ -585,10 +589,10 @@ install_haproxy()
             printf '    server galera%s %s check port %s backup\n' "${idx}" "${node}" "${FLUX_DB_CHECK_PORT}" >> "${tmp_write}"
         fi
         printf '    server galera%s %s check port %s\n' "${idx}" "${node}" "${FLUX_DB_CHECK_PORT}" >> "${tmp_read}"
-    done <<< "$(echo "${FLUX_DB_NODES}" | tr ',' '\n')"
+    done <<< "$(echo "${db_hosts}" | tr ',' '\n')"
 
     if [ ${idx} -eq 0 ]; then
-        log_message "Erro: nenhum no valido encontrado em FLUX_DB_NODES=${FLUX_DB_NODES}"
+        log_message "Erro: nenhum no valido encontrado em FLUX_DB_HOSTS=${db_hosts}"
         exit 1
     fi
 
@@ -600,7 +604,6 @@ install_haproxy()
     sed -i "s#__FLUX_DB_WRITE_BIND__#${bind_addr}:${FLUX_DB_WRITE_PORT}#g" /etc/haproxy/haproxy.cfg
     sed -i "s#__FLUX_DB_READ_BIND__#${bind_addr}:${FLUX_DB_READ_PORT}#g" /etc/haproxy/haproxy.cfg
     sed -i "s#__FLUX_DB_STATS_BIND__#127.0.0.1:${FLUX_DB_STATS_PORT}#g" /etc/haproxy/haproxy.cfg
-    sed -i "s#__FLUX_DB_CHECK_OPTION__#option httpchk GET /#g" /etc/haproxy/haproxy.cfg
     sed -i -e "/__FLUX_DB_WRITE_SERVERS__/r ${tmp_write}" -e "/__FLUX_DB_WRITE_SERVERS__/d" /etc/haproxy/haproxy.cfg
     sed -i -e "/__FLUX_DB_READ_SERVERS__/r ${tmp_read}" -e "/__FLUX_DB_READ_SERVERS__/d" /etc/haproxy/haproxy.cfg
     rm -f "${tmp_write}" "${tmp_read}"

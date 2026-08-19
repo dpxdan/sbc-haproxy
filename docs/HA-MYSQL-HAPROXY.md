@@ -22,8 +22,8 @@ Convenção de portas do HAProxy:
 
 | Porta | Backend | Balanceamento |
 |---|---|---|
-| **3306** | `galera_write` | `first` — um nó ativo, os demais em `backup` |
-| **3307** | `galera_read` | `leastconn` — todos os nós ativos |
+| **3306** | `fluxdb_write_pool` | `first` — um nó ativo, os demais em `backup` |
+| **3307** | `fluxdb_read_pool` | `leastconn` — todos os nós ativos |
 | **3316** | MySQL local | usada apenas na etapa 1, quando o banco ainda roda no SBC |
 | **8404** | estatísticas HTTP | somente loopback |
 
@@ -38,6 +38,42 @@ Isso é **obrigatório**, não uma preferência: `accounts.balance` é atualizad
 concorrentemente por `mod_nibblebill` e por `update_balance()` do processamento de CDR.
 Em Galera multi-master, escritas concorrentes na mesma linha a partir de nós diferentes
 produzem falha de certificação (deadlock) sob carga.
+
+### Topologia declarada por lista
+
+A composição do pool é uma lista ordenada em `FLUX_DB_HOSTS`, aplicada com
+`flux_ha_setup.sh --set-topology`:
+
+```
+FLUX_DB_HOSTS="local,10.0.0.12:3306,10.0.0.13:3306"
+```
+
+- `local` resolve para `127.0.0.1` na porta do MySQL da máquina — é assim que o MySQL
+  local participa do pool junto com hosts remotos.
+- A ordem define a prioridade de escrita: o primeiro é ativo, os demais entram com
+  `backup`.
+- Todos os hosts participam do pool de leitura.
+- Um host sem porta explícita assume 3306.
+
+A topologia corrente fica registrada em `/var/lib/flux/ha-topology.conf`.
+
+### Health check por papel
+
+Cada nó do pool roda o agente `flux-dbcheck` na porta 9200
+([config/healthcheck/README.md](../config/healthcheck/README.md)), que responde por
+papel em vez de responder por liveness:
+
+| Endpoint | 200 quando |
+|---|---|
+| `/write` | O nó aceita escrita: `read_only=OFF`; em Galera, também `wsrep_ready=ON` e `wsrep_local_state=4` |
+| `/read` | O nó serve leitura: sendo réplica, replicação rodando e lag ≤ `FLUX_DB_READ_MAX_LAG` |
+
+É isso que permite declarar uma réplica no pool de escrita em caráter permanente: ela
+fica DOWN enquanto for `read_only` e entra sozinha quando promovida. Um `mysql-check`
+comum não faz essa distinção e mandaria `INSERT`s para um nó que os recusa com
+`ERROR 1290`.
+
+**O agente precisa estar instalado em todos os hosts do pool, inclusive no local.**
 
 ### Modos de implantação
 
@@ -93,9 +129,10 @@ HAProxy. O curinga `%` cobre os dois casos.
 
 ### 2.3 Health check
 
-Instale o `clustercheck` em cada nó Galera seguindo `config/galera/README.md`.
+Instale o agente `flux-dbcheck` em cada nó Galera seguindo
+[config/healthcheck/README.md](../config/healthcheck/README.md).
 O HAProxy consulta a porta 9200 e só envia tráfego para nós com
-`wsrep_local_state=4`, `wsrep_ready=ON` e `read_only=OFF`.
+`wsrep_local_state=4`, `wsrep_ready=ON` e — no pool de escrita — `read_only=OFF`.
 
 ### 2.4 Parâmetros do servidor
 
@@ -114,6 +151,10 @@ um erro limpo — as conexões PDO do processamento de CDR são persistentes.
 ---
 
 ## 3. Instalação
+
+> Para implantação passo a passo em dois ou mais servidores, com os comandos na ordem
+> de execução, use o [roteiro de implantação](HA-MYSQL-TOPOLOGIA.md). Para investigar
+> problemas, o [diagnóstico](HA-MYSQL-DIAGNOSTICO.md).
 
 Ajuste as variáveis no topo de `flux_install.sh`:
 
@@ -235,7 +276,7 @@ O rollback restaura o snapshot mais recente, desabilita o HAProxy e devolve o My
 
 Se preferir intervir à mão:
 
-1. Provisione o cluster Galera e instale o `clustercheck` nos nós.
+1. Provisione o cluster Galera e instale o `flux-dbcheck` nos nós.
 2. Aplique `database/updates/update-18-08-2026.sql` na base atual.
 3. Dump e restauração no nó de escrita:
    ```bash
@@ -283,8 +324,8 @@ Interface HTTP: `http://127.0.0.1:8404/`
 ### Drenar um nó para manutenção
 
 ```bash
-echo "disable server galera_read/galera2" | socat /run/haproxy/admin.sock stdio
-echo "enable server galera_read/galera2" | socat /run/haproxy/admin.sock stdio
+echo "disable server fluxdb_read_pool/db_10_0_0_12" | socat /run/haproxy/admin.sock stdio
+echo "enable server fluxdb_read_pool/db_10_0_0_12" | socat /run/haproxy/admin.sock stdio
 ```
 
 ### Promover outro nó a nó de escrita
@@ -292,11 +333,11 @@ echo "enable server galera_read/galera2" | socat /run/haproxy/admin.sock stdio
 Sem reinício do serviço:
 
 ```bash
-echo "set server galera_write/galera1 state maint" | socat /run/haproxy/admin.sock stdio
+echo "set server fluxdb_write_pool/db_10_0_0_11 state maint" | socat /run/haproxy/admin.sock stdio
 ```
 
-O tráfego migra para `galera2`. Para tornar permanente, reordene `FLUX_DB_NODES` e
-reaplique a configuração.
+O tráfego migra para o próximo nó elegível. Para tornar permanente, reordene a lista em
+`FLUX_DB_HOSTS` e reaplique com `flux_ha_setup.sh --set-topology`.
 
 ### Failover automático
 

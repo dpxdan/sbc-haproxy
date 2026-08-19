@@ -1,5 +1,10 @@
 # Replicação MySQL entre dois servidores FluxSBC
 
+> Para a sequência de comandos a executar em cada servidor, use o
+> [roteiro de implantação](HA-MYSQL-TOPOLOGIA.md). Para investigar replicação que parou
+> ou não replica, o [diagnóstico](HA-MYSQL-DIAGNOSTICO.md). Este documento cobre o
+> racional, os riscos e os procedimentos de exceção.
+
 Este documento cobre a topologia de **dois servidores**: um FluxSBC em produção
 (`fs-1`) e um servidor de reserva (`fs-db-1`) que replica o banco e pode assumir em
 desastre.
@@ -13,7 +18,7 @@ trata de um cluster Galera externo.
 
 O instalador do FluxSBC usa **`mysql-community-server` 8 da Oracle**. Galera é uma
 extensão de MariaDB e Percona XtraDB Cluster — não existe para o MySQL da Oracle. Usar
-os artefatos de `config/galera/` exigiria trocar o servidor de banco nos dois nós e
+os artefatos de Galera exigiria trocar o servidor de banco nos dois nós e
 revalidar ODBC, as views com `DEFINER` e o `mod_nibblebill`.
 
 Além disso, **Galera com dois nós não tem quorum**. A perda de um nó deixa o
@@ -29,9 +34,14 @@ Replicação assíncrona não garante que toda transação confirmada no source 
 réplica. Promover automaticamente arriscaria perder transações e, se o source voltar,
 split-brain. Por isso:
 
-- O `fs-db-1` **não entra no `haproxy.cfg` do `fs-1`**. Ele replica, mas não recebe
-  tráfego.
-- A promoção é um procedimento **manual e deliberado** (`--promote-replica`).
+- O `fs-db-1` **entra no `haproxy.cfg` do `fs-1`**, mas como `backup` no pool de escrita
+  e sob um health check que só o aprova para escrita quando ele aceita escrita. Enquanto
+  for `read_only`, ele aparece DOWN nesse pool e **nunca** recebe `INSERT`.
+- No pool de **leitura** ele participa normalmente, saindo sozinho se o lag passar do
+  limite configurado.
+- A promoção continua sendo um procedimento **manual e deliberado**
+  (`--promote-replica`). O que mudou é que, uma vez promovido, o nó entra em serviço
+  automaticamente — sem editar o `haproxy.cfg`.
 
 Se failover automático for requisito, o caminho é um terceiro nó com Galera ou
 InnoDB Cluster.
@@ -149,12 +159,21 @@ O que ele faz, nesta ordem:
 4. **Regenera o `server_uuid`**: remove `/var/lib/mysql/auto.cnf`. Sem isso a
    replicação recusa conectar, porque o clone herdou o UUID do `fs-1`.
 5. Ajusta o `mysqld.cnf`: `server-id = 2`, `read_only = ON`, `super_read_only = ON`,
-   `event_scheduler = OFF`, `skip_replica_start = ON`, `relay_log`.
+   `event_scheduler = OFF`, `skip_replica_start = OFF` (a replicação sobe sozinha após
+   restart) e `relay_log`.
 6. Restaura o seed (liberando a escrita temporariamente, com `RESET MASTER` para
    aceitar o `gtid_purged` do dump) e **desabilita os EVENTs herdados**.
 7. Emite `CHANGE REPLICATION SOURCE TO ... SOURCE_AUTO_POSITION = 1` e `START REPLICA`,
    com fallback automático para a sintaxe `CHANGE MASTER TO` / `START SLAVE` em versões
    anteriores à 8.0.23.
+8. Persiste os parâmetros de replicação em `/etc/mysql/flux-replication.cnf` e a
+   credencial administrativa em `/etc/mysql/flux-repair.cnf` (ambos `0600`, root), sem
+   os quais a recuperação automática não consegue reconectar a replicação.
+
+> **Não pule o `SEED_DUMP`.** Sem ele o script apenas avisa e segue, mas a réplica fica
+> com o `gtid_executed` herdado do clone e **descarta silenciosamente** as transações do
+> master: threads rodando, lag zero e tabelas vazias. É a falha mais difícil de perceber
+> em toda esta arquitetura — veja a seção 1 do [diagnóstico](HA-MYSQL-DIAGNOSTICO.md).
 
 ---
 

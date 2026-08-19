@@ -15,6 +15,7 @@ VERSION="0.1"
 DB_CLIENTS=""
 DB_WRITE_PORT=3306
 DB_READ_PORT=3307
+DB_CHECK_PORT=9200
 
 firewall_defaults () {
 
@@ -172,6 +173,7 @@ firewall_start () {
         for db_client in $DB_CLIENTS; do
                 iptables -A INPUT -p tcp -s $db_client --dport $DB_WRITE_PORT -j ACCEPT
                 iptables -A INPUT -p tcp -s $db_client --dport $DB_READ_PORT -j ACCEPT
+                iptables -A INPUT -p tcp -s $db_client --dport $DB_CHECK_PORT -j ACCEPT
         done
 
         # Libera rede VPN

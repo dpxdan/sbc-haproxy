@@ -13,7 +13,8 @@
 #   ./flux_replication_check.sh --quiet            so registra em log
 #   ./flux_replication_check.sh --compare          compara contagens com o source
 #
-# Codigos de saida: 0 saudavel, 1 degradado, 2 erro de configuracao
+# Codigos de saida: 0 saudavel, 1 degradado, 2 erro de configuracao,
+#                   3 divergencia confirmada (transacoes descartadas)
 set -uo pipefail
 
 FLUXDIR="${FLUXDIR:-/var/lib/flux}"
@@ -52,7 +53,8 @@ log()
     fi
 }
 
-fail()  { log FAIL "$@"; EXIT_CODE=1; }
+fail()  { log FAIL "$@"; if [[ $EXIT_CODE -lt 1 ]]; then EXIT_CODE=1; fi; }
+diverged() { log FAIL "$@"; EXIT_CODE=3; }
 warn()  { log WARN "$@"; if [[ $EXIT_CODE -eq 0 ]]; then EXIT_CODE=1; fi; }
 
 cleanup()
@@ -79,6 +81,8 @@ Codigos de saida:
   0  replicacao saudavel
   1  replicacao degradada ou parada
   2  erro de configuracao (credenciais, MySQL inacessivel)
+  3  divergencia confirmada: o master tem transacoes que esta replica
+     descartou. Nao se resolve sozinha; exige re-seed.
 
 Registrar no cron do no de banco:
   */5 * * * * /opt/flux/misc/flux_replication_check.sh --quiet
@@ -198,6 +202,8 @@ IO_ERROR=$(field "Last_IO_Error")
 SQL_ERROR=$(field "Last_SQL_Error")
 SOURCE_HOST=$(field "Source_Host")
 [[ -z "$SOURCE_HOST" ]] && SOURCE_HOST=$(field "Master_Host")
+SOURCE_PORT=$(field "Source_Port")
+[[ -z "$SOURCE_PORT" ]] && SOURCE_PORT=$(field "Master_Port")
 RETRIEVED=$(field "Retrieved_Gtid_Set")
 EXECUTED=$(field "Executed_Gtid_Set")
 
@@ -235,6 +241,67 @@ if [[ -n "$RETRIEVED" && "$RETRIEVED" != "$EXECUTED" ]]; then
     log WARN "Ha GTIDs recebidos ainda nao aplicados (normal sob carga, persistente indica atraso)."
 fi
 
+# Divergência silenciosa: o master emite transacoes que esta replica considera
+# ja aplicadas (tipico de clone cuja base foi conectada sem seed). As threads
+# ficam Yes e o lag zero, mas os dados nunca chegam.
+check_divergence()
+{
+    local gtid_mode
+    gtid_mode=$(mysql --defaults-extra-file="$MYSQL_CNF" -N -B -e "SELECT @@GLOBAL.gtid_mode;" 2>/dev/null)
+
+    if [[ "$gtid_mode" != "ON" ]]; then
+        log WARN "gtid_mode=${gtid_mode:-desconhecido}: verificacao de divergencia ignorada."
+        return 0
+    fi
+
+    if [[ -z "$SOURCE_HOST" ]]; then
+        log WARN "Sem Source_Host: verificacao de divergencia ignorada."
+        return 0
+    fi
+
+    local master_gtid
+    master_gtid=$(mysql -h "$SOURCE_HOST" -P "${SOURCE_PORT:-3306}" --protocol=TCP \
+        -u"$DB_USER" -p"$DB_PASS" -N -B -e "SELECT @@GLOBAL.gtid_executed;" 2>/dev/null | tr -d '\n')
+
+    if [[ -z "$master_gtid" ]]; then
+        log WARN "Nao foi possivel ler o gtid_executed do master ${SOURCE_HOST}."
+        return 0
+    fi
+
+    local missing
+    missing=$(mysql --defaults-extra-file="$MYSQL_CNF" -N -B \
+        -e "SELECT GTID_SUBTRACT('${master_gtid}', @@GLOBAL.gtid_executed);" 2>/dev/null | tr -d '\n')
+
+    if [[ -z "$missing" ]]; then
+        log OK "Nenhuma transacao pendente do master."
+        return 0
+    fi
+
+    if [[ "${LAG:-0}" != "0" ]]; then
+        log WARN "Transacoes pendentes com lag=${LAG}s: atraso normal, a replica esta aplicando."
+        return 0
+    fi
+
+    log WARN "Transacoes do master ausentes com lag zero; reamostrando em 5s..."
+    sleep 5
+
+    missing=$(mysql --defaults-extra-file="$MYSQL_CNF" -N -B \
+        -e "SELECT GTID_SUBTRACT('${master_gtid}', @@GLOBAL.gtid_executed);" 2>/dev/null | tr -d '\n')
+
+    if [[ -z "$missing" ]]; then
+        log OK "Pendencia aplicada na reamostragem; replicacao saudavel."
+        return 0
+    fi
+
+    diverged "DIVERGENCIA CONFIRMADA: o master tem transacoes que esta replica nao aplicou"
+    log FAIL "GTIDs ausentes: ${missing}"
+    log FAIL "As threads estao rodando e o lag e zero: as transacoes foram descartadas."
+    log FAIL "Causa tipica: replica conectada sem seed, herdando o gtid_executed do clone."
+    log FAIL "Correcao: /opt/flux/misc/flux_replication_repair.sh"
+}
+
+check_divergence
+
 READ_ONLY=$(mysql --defaults-extra-file="$MYSQL_CNF" -N -B -e "SELECT @@GLOBAL.super_read_only;" 2>/dev/null)
 if [[ "$READ_ONLY" == "1" ]]; then
     log OK "No protegido contra escrita (super_read_only=ON)."
@@ -271,6 +338,8 @@ fi
 
 if [[ $EXIT_CODE -eq 0 ]]; then
     log OK "Replicacao saudavel."
+elif [[ $EXIT_CODE -eq 3 ]]; then
+    log FAIL "Replicacao divergente. Rode: /opt/flux/misc/flux_replication_repair.sh"
 else
     log FAIL "Replicacao degradada. Verifique ${LOG_FILE}"
 fi

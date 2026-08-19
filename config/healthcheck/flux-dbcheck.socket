@@ -1,0 +1,10 @@
+[Unit]
+Description=FluxSBC database health check (socket)
+Documentation=file:///opt/flux/docs/HA-MYSQL-TOPOLOGIA.md
+
+[Socket]
+ListenStream=9200
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
